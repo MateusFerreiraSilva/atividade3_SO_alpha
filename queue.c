@@ -1,12 +1,6 @@
 #include <stdio.h>
 #include "queue.h"
 
-struct queue
-{
-    int front, rear, size;
-    int data[QUEUE_MAX_SIZE];
-};
-
 void queue_init(queue *q)
 {
     q->front = 0;

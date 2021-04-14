@@ -1,3 +1,6 @@
+makemain:
+	gcc main.c -lpthread
+
 rst: clean run
 
 run: all
