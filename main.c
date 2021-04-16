@@ -17,6 +17,7 @@ struct shared_area
 {
     sem_t mutex;
     int pid[7];
+    int pNum;
     queue f1;
 };
 
@@ -24,6 +25,7 @@ typedef struct shared_area shared_area;
 
 shared_area *shared_area_ptr;
 sem_t thread_mutex;
+int canal[2][2];
 
 void *randConsume(void *args)
 {
@@ -36,7 +38,8 @@ void *randConsume(void *args)
         if (!queue_empty(q))
         {
             val = queue_pop(q);
-            printf("-->%d -->t%d\n", val, id);
+            int idx = id == 1 ? 0 : 1;
+            write(canal[idx][1], &val, sizeof(int));
         }
         sem_post((sem_t *)&thread_mutex);
 
@@ -75,10 +78,10 @@ void randGerenete()
         if (!queue_full(q))
         {
             queue_push(q, r);
-            printf("%d - Processo: %d Escreveu %d\n", queue_size(q), id, r);
+            // printf("%d - Processo: %d Escreveu %d\n", queue_size(q), id, r);
             if (queue_full(q))
             {
-                printf("Processo %d deu o sinal!!!\n", id);
+                // printf("Processo %d deu o sinal!!!\n", id);
                 kill(shared_area_ptr->pid[3], SIGUSR1);
             }
         }
@@ -120,11 +123,18 @@ int main()
         exit(-1);
     }
 
+    // Inicalizacoes!!!!!!!!
     queue_init(&shared_area_ptr->f1);
     int pid[7], status[7];
     memset(shared_area_ptr->pid, -1, sizeof shared_area_ptr->pid);
+    shared_area_ptr->pNum = 6;
+    if (pipe(canal[0]) == -1 || pipe(canal[1]) == -1)
+    {
+        printf("Erro pipe()");
+        exit(-1);
+    }
 
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < shared_area_ptr->pNum; i++)
     {
         pid[i] = fork();
         if (pid[i] == 0)
@@ -142,6 +152,17 @@ int main()
                 while (1)
                     pause(); // espera pelo sinal
             }
+            else if (i < 6)
+            { // p5 e p6
+                int val;
+                int idx = i == 4 ? 0 : 1;
+                while (read(canal[idx][0], &val, sizeof(int)))
+                    printf("-->%d P%d\n", val, idx == 0 ? 5 : 6);
+            }
+            else if (i == 6)
+            {
+                i = i;
+            }
         }
     }
 
@@ -149,10 +170,10 @@ int main()
     while (1) // espera todos os processo inicializarem
     {
         counter = 0;
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < shared_area_ptr->pNum; i++)
             if (shared_area_ptr->pid[i] != -1)
                 counter++;
-        if (counter == 4)
+        if (counter == shared_area_ptr->pNum)
         {
             sem_post((sem_t *)&shared_area_ptr->mutex); // abre o semaforo para liberar p1, p2, p3 e p4
             break;
@@ -161,7 +182,7 @@ int main()
             sleep(1);
     }
 
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < shared_area_ptr->pNum; i++)
         pid[i] = wait(&status[i]);
 
     return 0;
