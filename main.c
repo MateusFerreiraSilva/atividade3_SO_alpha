@@ -7,6 +7,8 @@
 #include "queue.h"
 #include <semaphore.h>
 #include <signal.h>
+#include <pthread.h>
+#include <string.h>
 
 #define MEM_SZ 4096
 #define BUFF_SZ MEM_SZ - sizeof(int) - sizeof(sem_t)
@@ -14,24 +16,51 @@
 struct shared_area
 {
     sem_t mutex;
-    int p4Id;
+    int pid[7];
     queue f1;
 };
 
 typedef struct shared_area shared_area;
 
 shared_area *shared_area_ptr;
+sem_t thread_mutex;
 
-void randConsume(int signal)
+void *randConsume(void *args)
 {
+    int id = *((int *)args);
     queue *q = &shared_area_ptr->f1;
     int val;
-    sem_wait((sem_t *)&shared_area_ptr->mutex);
-    while (queue_size(q) > 0)
+    while (1)
     {
-        val = queue_pop(q);
-        printf("-->%d\n", val);
+        sem_wait((sem_t *)&thread_mutex);
+        if (!queue_empty(q))
+        {
+            val = queue_pop(q);
+            printf("-->%d -->t%d\n", val, id);
+        }
+        sem_post((sem_t *)&thread_mutex);
+
+        if (queue_empty(q))
+            break;
     }
+    pthread_exit(NULL);
+}
+
+void randConsumeUtil(int signal) // p2
+{
+    pthread_t t[2];
+    const int id[2] = {1, 2};
+    if (sem_init((sem_t *)&thread_mutex, 0, 1) != 0)
+    {
+        printf("sem_init thread falhou\n");
+        exit(-1);
+    }
+
+    sem_wait((sem_t *)&shared_area_ptr->mutex);
+    for (int i = 0; i < 2; i++)
+        pthread_create(&t[i], NULL, randConsume, (void *)&id[i]);
+    for (int i = 0; i < 2; i++)
+        pthread_join(t[i], NULL);
     sem_post((sem_t *)&shared_area_ptr->mutex);
 }
 
@@ -50,7 +79,7 @@ void randGerenete()
             if (queue_full(q))
             {
                 printf("Processo %d deu o sinal!!!\n", id);
-                kill(shared_area_ptr->p4Id, SIGUSR1);
+                kill(shared_area_ptr->pid[3], SIGUSR1);
             }
         }
         sem_post((sem_t *)&shared_area_ptr->mutex);
@@ -84,7 +113,8 @@ int main()
 
     shared_area_ptr = (shared_area *)shared_memory;
 
-    if (sem_init((sem_t *)&shared_area_ptr->mutex, 1, 1) != 0)
+    // semaforo inicia fechado
+    if (sem_init((sem_t *)&shared_area_ptr->mutex, 1, 0) != 0)
     {
         printf("sem_init falhou\n");
         exit(-1);
@@ -92,24 +122,43 @@ int main()
 
     queue_init(&shared_area_ptr->f1);
     int pid[7], status[7];
+    memset(shared_area_ptr->pid, -1, sizeof shared_area_ptr->pid);
 
-    pid[3] = fork(); // cria p4
-    if (pid[3] == 0)
-    { // p4
-        signal(SIGUSR1, randConsume);
-        while (1)
-        {
-            pause(); // espera pelo sinal
-        }
-    }
-    else // pai
-        shared_area_ptr->p4Id = pid[3];
-
-    for (int i = 0; i < 3; i++) // cria p1, p2, p3
+    for (int i = 0; i < 4; i++)
     {
         pid[i] = fork();
-        if (pid[i] == 0) // p1 ou p2 ou p3
-            randGerenete();
+        if (pid[i] == 0)
+        { // filhos
+            shared_area_ptr->pid[i] = getpid();
+            if (i < 3)
+            { // p1 ou p2 ou p3
+                // printf("Processo %d pid %d %d\n", i + 1, getpid(), shared_area_ptr->pid[i]);
+                randGerenete();
+            }
+            else if (i < 4)
+            { // p4
+                // printf("Processo %d pid %d %d\n", i + 1, getpid(), shared_area_ptr->pid[i]);
+                signal(SIGUSR1, randConsumeUtil);
+                while (1)
+                    pause(); // espera pelo sinal
+            }
+        }
+    }
+
+    int counter;
+    while (1) // espera todos os processo inicializarem
+    {
+        counter = 0;
+        for (int i = 0; i < 4; i++)
+            if (shared_area_ptr->pid[i] != -1)
+                counter++;
+        if (counter == 4)
+        {
+            sem_post((sem_t *)&shared_area_ptr->mutex); // abre o semaforo para liberar p1, p2, p3 e p4
+            break;
+        }
+        else
+            sleep(1);
     }
 
     for (int i = 0; i < 4; i++)
