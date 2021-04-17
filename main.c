@@ -12,11 +12,12 @@
 #include <fcntl.h>
 
 #define MEM_SZ 4096
+#define END 500
 
 struct shared_area
 {
     sem_t mutex;
-    int pid[7];
+    pid_t pid[7];
     int pNum, counter;
     int turn; // turn 0->P5, 1->P6, 2->P7T1, 3->P7T2, 4->P7T3
     queue f1, f2;
@@ -50,14 +51,14 @@ void *f2Consume(void *args)
     {
         if (shared_area_ptr->turn == turn)
         {
-            if (!queue_empty(q) && shared_area_ptr->counter < 1000)
+            if (!queue_empty(q) && shared_area_ptr->counter < END)
             {
                 val = queue_pop(q);
                 printf("%d\n", val);
                 fflush(stdout);
                 shared_area_ptr->counter++;
             }
-            if (shared_area_ptr->counter == 1000)
+            if (shared_area_ptr->counter == END)
                 break;
             next_turn();
         }
@@ -65,24 +66,6 @@ void *f2Consume(void *args)
     next_turn();
     pthread_exit(NULL);
 }
-
-// void f2Produce(int val, int turn)
-// {
-//     queue *q = &shared_area_ptr->f2;
-//     while (1)
-//     {
-//         if (shared_area_ptr->turn == turn)
-//         {
-//             if (!queue_full(q))
-//             {
-//                 printf("val %d turn %d\n", val, turn);
-//                 fflush(stdout);
-//                 queue_push(q, val);
-//             }
-//             next_turn();
-//         }
-//     }
-// }
 
 void *f1Consume(void *args)
 {
@@ -211,13 +194,20 @@ int main()
         if (pid[i] == 0)
         { // filhos
             shared_area_ptr->pid[i] = getpid();
-            if (i < 3)
-            { // p1 ou p2 ou p3
+
+            switch (i)
+            {
+
+            case 0: // p1
+            case 1: // p2
+            case 2: // p3
+            {
                 fechaCanais();
                 f1Gerenete();
             }
-            else if (i < 4)
-            { // p4
+
+            case 3: // p4
+            {
 
                 // fecha canais de leitura
                 close(canal1[0]);
@@ -227,8 +217,10 @@ int main()
                 while (1)
                     pause(); // espera pelo sinal
             }
-            else if (i < 6)
-            { // p5 e p6
+
+            case 4: // p5
+            case 5: // p6
+            {
                 // fecha canais de escrita
                 close(canal1[1]);
                 close(canal2[1]);
@@ -239,52 +231,25 @@ int main()
 
                 // checa se pipe esta fechado
 
-                if (turn == 0)
-                {
-                    while (1)
+                while (1)
+                { // f2Produce
+                    if (shared_area_ptr->turn == turn)
                     {
-                        if (shared_area_ptr->turn == turn)
-                        {
-                            if (read(canal1[0], &val, sizeof(int)) > 0)
-                            {
-                                // printf("read %d turn %d\n", val, turn);
-                                // fflush(stdout);
-                                if (!queue_full(q))
-                                {
-                                    val = queue_push(q, val);
-                                    // printf("%d\n", queue_rear(q));
-                                    // fflush(stdout);
-                                }
-                            }
-                            next_turn();
-                        }
-                    }
-                }
+                        ssize_t bytes_read =
+                            turn == 0 ? read(canal1[0], &val, sizeof(int))
+                                      : read(canal2[0], &val, sizeof(int));
 
-                else if (turn == 1)
-                {
-                    while (1)
-                    {
-                        if (shared_area_ptr->turn == turn)
-                        {
-                            if (read(canal2[0], &val, sizeof(int)) > 0)
-                            {
-                                // printf("read %d turn %d\n", val, turn);
-                                // fflush(stdout);
-                                if (!queue_full(q))
-                                {
-                                    val = queue_push(q, val);
-                                    // printf("%d\n", queue_rear(q));
-                                    // fflush(stdout);
-                                }
-                            }
-                            next_turn();
-                        }
+                        if (bytes_read == sizeof(int))
+                            if (!queue_full(q))
+                                queue_push(q, val);
+
+                        next_turn();
                     }
                 }
             }
-            else
-            { // p7
+
+            case 6: // p7
+            {
                 fechaCanais();
                 pthread_t t[3];
                 const int turn[3] = {2, 3, 4};
@@ -294,10 +259,13 @@ int main()
                     pthread_join(t[i], NULL);
 
                 printf("counter %d\n", shared_area_ptr->counter);
+                fflush(stdout);
                 exit(status[i]);
             }
-        }
-    }
+
+            } // switch
+        }     // if
+    }         // for
 
     int counter;
     while (1) // espera todos os processo inicializarem
