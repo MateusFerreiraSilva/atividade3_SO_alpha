@@ -29,6 +29,7 @@ typedef struct shared_area shared_area;
 
 shared_area *shared_area_ptr;
 sem_t thread_mutex;
+pthread_t p4Threads[2];
 int canal1[2], canal2[2];
 int MEM_SZ = sizeof(shared_area);
 
@@ -71,9 +72,8 @@ void *f2Consume(void *args)
     pthread_exit(NULL);
 }
 
-void *f1Consume(void *args)
+void f1ConsumeT2()
 {
-    int id = *((int *)args);
     queue *q = &shared_area_ptr->f1;
     int val;
     while (1)
@@ -82,10 +82,7 @@ void *f1Consume(void *args)
         if (!queue_empty(q))
         {
             val = queue_pop(q);
-            if (id == 1)
-                write(canal1[1], &val, sizeof(int));
-            else
-                write(canal2[1], &val, sizeof(int));
+            write(canal2[1], &val, sizeof(int));
         }
         sem_post((sem_t *)&thread_mutex);
 
@@ -95,25 +92,48 @@ void *f1Consume(void *args)
     sem_post((sem_t *)&shared_area_ptr->mutex);
 }
 
-void waitSignal()
+void *f1ConsumeThread()
 {
-    pthread_t t[2];
-    const int id[2] = {1, 2};
+    int id;
+    if (p4Threads[0] == pthread_self())
+        id = 0;
+    else if (p4Threads[1] == pthread_self())
+        id = 1;
 
+    queue *q = &shared_area_ptr->f1;
+    int val;
+    while (1)
+    {
+        sem_wait((sem_t *)&thread_mutex);
+        if (!queue_empty(q))
+        {
+            val = queue_pop(q);
+            if (id == 0)
+                write(canal1[1], &val, sizeof(int));
+            else if (id == 1)
+                write(canal2[1], &val, sizeof(int));
+        }
+        sem_post((sem_t *)&thread_mutex);
+
+        if (queue_empty(q))
+            break;
+    }
+    sem_post((sem_t *)&shared_area_ptr->mutex);
+    pthread_exit(NULL);
+}
+
+void f1Consume()
+{
     if (sem_init((sem_t *)&thread_mutex, 0, 1) != 0)
     {
         printf("sem_init thread falhou\n");
         exit(-1);
     }
 
-    sem_wait((sem_t *)&shared_area_ptr->mutex);
-
     for (int i = 0; i < 2; i++)
-        pthread_create(&t[i], NULL, f1Consume, (void *)&id[i]);
-    for (int i = 0; i < 2; i++)
-        pthread_join(t[i], NULL);
-
-    sem_post((sem_t *)&shared_area_ptr->mutex);
+        pthread_create(&p4Threads[i], NULL, f1ConsumeThread, NULL);
+    for (int i = 0; i < 2; i++) // fica esperando as threads terminarem mas elas nunca terminam
+        pthread_join(p4Threads[i], NULL);
 }
 
 void f1Gerenete()
@@ -122,7 +142,7 @@ void f1Gerenete()
     queue *q = &shared_area_ptr->f1;
     while (1)
     {
-        r = rand() % 1001;
+        r = rand() % 1000 + 1;
         sem_wait((sem_t *)&shared_area_ptr->mutex);
         if (!queue_full(q))
         {
@@ -130,7 +150,8 @@ void f1Gerenete()
             if (queue_full(q))
                 kill(shared_area_ptr->pid[3], SIGUSR1);
         }
-        sem_post((sem_t *)&shared_area_ptr->mutex);
+        if (!queue_full(q)) // se f1 estiver cheia o sem_post eh feito por P4
+            sem_post((sem_t *)&shared_area_ptr->mutex);
     }
 }
 
@@ -214,7 +235,7 @@ int main()
                 close(canal1[0]);
                 close(canal2[0]);
 
-                signal(SIGUSR1, waitSignal);
+                signal(SIGUSR1, f1Consume);
                 while (1)
                     pause(); // espera pelo sinal
             }
@@ -306,7 +327,7 @@ int main()
     printf("P6 %d\n\n", shared_area_ptr->qntVal[1]);
 
     int moda[2] = {0}, maxVal = 0;
-    for (int i = 1; i < 1000; i++)
+    for (int i = 1; i <= 1000; i++)
     {
         if (moda[0] < shared_area_ptr->freq[i])
         {
