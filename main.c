@@ -1,25 +1,27 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/shm.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include "queue.h"
+#include <string.h>
+#include <time.h>
 #include <semaphore.h>
 #include <signal.h>
 #include <pthread.h>
-#include <string.h>
-#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/shm.h>
+#include <sys/wait.h>
+#include "queue.h"
 
-#define MEM_SZ 4096
-#define END 500
+#define END 10000
 
 struct shared_area
 {
     sem_t mutex;
     pid_t pid[7];
-    int pNum, counter;
+    int pNum;
+    int counter;
     int turn; // turn 0->P5, 1->P6, 2->P7T1, 3->P7T2, 4->P7T3
+    int qntVal[2];
+    short freq[1001];
     queue f1, f2;
 };
 
@@ -28,6 +30,7 @@ typedef struct shared_area shared_area;
 shared_area *shared_area_ptr;
 sem_t thread_mutex;
 int canal1[2], canal2[2];
+int MEM_SZ = sizeof(shared_area);
 
 void fechaCanais()
 {
@@ -56,6 +59,7 @@ void *f2Consume(void *args)
                 val = queue_pop(q);
                 printf("%d\n", val);
                 fflush(stdout);
+                shared_area_ptr->freq[val]++;
                 shared_area_ptr->counter++;
             }
             if (shared_area_ptr->counter == END)
@@ -79,13 +83,9 @@ void *f1Consume(void *args)
         {
             val = queue_pop(q);
             if (id == 1)
-            {
                 write(canal1[1], &val, sizeof(int));
-            }
             else
-            {
                 write(canal2[1], &val, sizeof(int));
-            }
         }
         sem_post((sem_t *)&thread_mutex);
 
@@ -122,7 +122,7 @@ void f1Gerenete()
     queue *q = &shared_area_ptr->f1;
     while (1)
     {
-        r = rand() % 1000 + 1;
+        r = rand() % 1001;
         sem_wait((sem_t *)&shared_area_ptr->mutex);
         if (!queue_full(q))
         {
@@ -136,6 +136,9 @@ void f1Gerenete()
 
 int main()
 {
+    struct timespec begin, end;
+    clock_gettime(CLOCK_MONOTONIC, &begin);
+
     key_t key = 1101;
     void *shared_memory = (void *)0;
     int shmid;
@@ -148,6 +151,7 @@ int main()
     }
 
     printf("shmid=%d\n", shmid);
+    fflush(stdout);
 
     if (shared_memory == (void *)-1)
     {
@@ -158,6 +162,7 @@ int main()
     shared_memory = shmat(shmid, (void *)0, 0);
 
     printf("Memoria compartilhada no endereco=%p\n", shared_memory);
+    fflush(stdout);
 
     shared_area_ptr = (shared_area *)shared_memory;
 
@@ -168,26 +173,22 @@ int main()
         exit(-1);
     }
 
-    // Inicalizacoes!!!!!!!!
-    queue_init(&shared_area_ptr->f1);
-    queue_init(&shared_area_ptr->f2);
+    // Inicalizacoes
     int pid[7], status[7];
-    memset(shared_area_ptr->pid, -1, sizeof shared_area_ptr->pid);
+    memset(shared_area_ptr->pid, -1, sizeof(shared_area_ptr->pid));
+    memset(shared_area_ptr->qntVal, 0, sizeof(shared_area_ptr->qntVal));
+    memset(shared_area_ptr->freq, 0, sizeof(shared_area_ptr->freq));
     shared_area_ptr->pNum = 7;
     shared_area_ptr->counter = 0;
     shared_area_ptr->turn = -1; // deixa p5, p6 e p7 parados
+    queue_init(&shared_area_ptr->f2);
+    queue_init(&shared_area_ptr->f1);
     if (pipe(canal1) == -1 || pipe(canal2) == -1)
     {
         printf("Erro pipe()");
         exit(-1);
     }
-    // else if (fcntl(canal1[0], F_SETFL, O_NONBLOCK) < 0 || fcntl(canal2[0], F_SETFL, O_NONBLOCK) < 0)
-    // {
-    //     printf("Erro pipe()");
-    //     exit(-1);
-    // }
 
-    fflush(stdout);
     for (int i = 0; i < shared_area_ptr->pNum; i++)
     {
         pid[i] = fork();
@@ -241,7 +242,8 @@ int main()
 
                         if (bytes_read == sizeof(int))
                             if (!queue_full(q))
-                                queue_push(q, val);
+                                if (queue_push(q, val))
+                                    shared_area_ptr->qntVal[turn]++;
 
                         next_turn();
                     }
@@ -257,16 +259,15 @@ int main()
                     pthread_create(&t[i], NULL, f2Consume, (void *)&turn[i]);
                 for (int i = 0; i < 3; i++)
                     pthread_join(t[i], NULL);
-
-                printf("counter %d\n", shared_area_ptr->counter);
-                fflush(stdout);
                 exit(status[i]);
             }
 
             } // switch
         }     // if
     }         // for
+    fechaCanais();
 
+    sleep(2);
     int counter;
     while (1) // espera todos os processo inicializarem
     {
@@ -284,8 +285,40 @@ int main()
             sleep(1);
     }
 
+    pid[6] = wait(&status[6]);  // espera p7 terminar
+    for (int i = 0; i < 6; i++) // finaliza todos os outros filhos
+        kill(pid[i], SIGKILL);
+
     for (int i = 0; i < shared_area_ptr->pNum; i++)
         pid[i] = wait(&status[i]);
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double seconds = end.tv_sec - begin.tv_sec;
+    // double nanoseconds = end.tv_nsec - begin.tv_nsec / 1000000000.0;
+    // seconds += nanoseconds;
+    double minutes = seconds / 60;
+
+    printf("\nTempo total de execução:\n");
+    printf("%.2lf segundos ou %.2lf minutos\n\n", seconds, minutes);
+
+    printf("Quantidade de valores processados:\n");
+    printf("P5 %d\n", shared_area_ptr->qntVal[0]);
+    printf("P6 %d\n\n", shared_area_ptr->qntVal[1]);
+
+    int moda[2] = {0}, maxVal = 0;
+    for (int i = 1; i < 1000; i++)
+    {
+        if (moda[0] < shared_area_ptr->freq[i])
+        {
+            moda[0] = shared_area_ptr->freq[i];
+            moda[1] = i;
+        }
+        if (shared_area_ptr->freq[i] > 0 && maxVal < i)
+            maxVal = i;
+    }
+
+    printf("Moda: %d\n", moda[1]);
+    printf("Maior valor: %d\n", maxVal);
 
     return 0;
 }

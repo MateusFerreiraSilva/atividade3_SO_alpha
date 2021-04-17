@@ -12,42 +12,14 @@
 
 int main()
 {
-    int p[2];
-    pipe(p);
-    int pid, status;
-    pid = fork();
-    if (pid == 0)
+    int n, c1 = 0, c2 = 0;
+    while (scanf("%d", &n) != EOF)
     {
-        close(p[0]);
-        int i = 0;
-        while (1)
-        {
-            write(p[1], &i, sizeof(int));
-            // printf("write %d\n", i);
-            i++;
-        }
+        if (n == 0)
+            c1++;
+        else if (n == 1)
+            c2++;
     }
-    else
-    {
-        close(p[1]);
 
-        int i;
-        while (1)
-        {
-            read(p[0], &i, sizeof(int));
-            printf("read %d\n", i);
-            fflush(stdout);
-            // buffer[aux++] = i;
-            // if (aux == 1000)
-            // {
-            //     for (int j = 0; j < 1000; j++)
-            //     {
-            //         printf("read %d\n", buffer[j]);
-            //     }
-            //     aux = 0;
-            // }
-        }
-
-        pid = wait(&status);
-    }
+    printf("%d %d\n", c1, c2);
 }

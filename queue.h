@@ -1,5 +1,5 @@
-#define SUCCESS 1001010
-#define FAIL -1001010
+#define SUCCESS 10101
+#define FAIL 0
 #define QUEUE_MAX_SIZE 10
 
 struct queue
